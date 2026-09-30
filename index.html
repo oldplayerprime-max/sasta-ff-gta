@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -327,11 +327,11 @@
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 500);
     
     // [SUPER OPTIMIZATION 1] Fast Renderer Settings
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     renderer.setSize(innerWidth, innerHeight, false);
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     document.body.appendChild(renderer.domElement);
@@ -1162,7 +1162,7 @@
     function shoot() {
       const g = getGun();
       if (!g || player.shootCd > 0 || player.state !== 'ground' || player.inCar) return;
-      player.shootCd = g.cd; player.recoil = 0.1;
+      player.shootCd = g.cd; player.recoil = 0.1; sfx('shot');
 
       updateCrosshairLock();
       let dir = getAimDirection();
@@ -1201,13 +1201,13 @@
         const dmg = isHead ? (g.head || 55) : (g.body || 28);
         hitBot.health -= dmg;
         onBotDamaged(hitBot);
-        showDamageNum(dmg, isHead);
+        showDamageNum(dmg, isHead); sfx(isHead ? 'head' : 'hit');
         document.getElementById('hit-marker').style.opacity = '1';
         setTimeout(() => document.getElementById('hit-marker').style.opacity = '0', 50);
         if (hitBot.health <= 0) {
           hitBot.alive = false; hitBot.mesh.visible = false;
           if (hitBot.inCar) { hitBot.inCar.occupied = false; hitBot.inCar = null; }
-          player.kills++; updateUI(); checkBooyah();
+          onKill(hitBot, isHead); player.kills++; updateUI(); checkBooyah();
         }
       }
 
@@ -1276,7 +1276,7 @@
       menu.classList.remove('hidden');
       menu.style.display = 'flex';
       menu.querySelector('h1').textContent = title;
-      document.getElementById('menu-sub').textContent = sub;
+      document.getElementById('menu-sub').textContent = sub + (bestKills ? '  •  🏆 Best: ' + bestKills : '');
       document.getElementById('start-btn').textContent = btnText;
       gameState = title.indexOf('ELIMINATED') >= 0 ? 'dead' : (title.indexOf('BOOYAH') >= 0 ? 'booyah' : 'menu');
     }
@@ -1356,6 +1356,7 @@
       });
       gunPickups.forEach(g => { g.taken = false; g.mesh.visible = true; if (g.marker) g.marker.visible = true; });
       cars.forEach(c => { c.occupied = false; });
+      zoneReset(); dropsClear();
       lobbyTimer = 15;
       lobbyActive = true;
       document.getElementById('countdown-overlay').classList.add('show');
@@ -1601,7 +1602,7 @@
           if (!b.alive || b.inCar) continue;
           if (c.pos.distanceTo(b.pos) < 3.2) {
             b.alive = false; b.mesh.visible = false;
-            player.kills++; updateUI(); checkBooyah();
+            onKill(b, false); player.kills++; updateUI(); checkBooyah();
           }
         }
         const camOffset = new THREE.Vector3(0, 4.5, 8.5).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
@@ -1807,13 +1808,105 @@
       }
     }
 
+    // ===== EXTRA FEATURES: sound, kill feed, loot drops, best score, safe zone =====
+    let bestKills = 0;
+    try { bestKills = +localStorage.getItem('sasta_best') || 0; } catch (e) {}
+    let _ac = null;
+    try { _ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    addEventListener('pointerdown', () => { if (_ac && _ac.state === 'suspended') _ac.resume(); }, { passive: true });
+    function sfx(kind) {
+      if (!_ac || _ac.state !== 'running') return;
+      const t = _ac.currentTime;
+      const tone = (f, d, type, v, at = 0) => {
+        const o = _ac.createOscillator(), g = _ac.createGain();
+        o.type = type; o.frequency.value = f;
+        g.gain.setValueAtTime(v, t + at);
+        g.gain.exponentialRampToValueAtTime(0.001, t + at + d);
+        o.connect(g); g.connect(_ac.destination);
+        o.start(t + at); o.stop(t + at + d);
+      };
+      if (kind === 'shot') tone(140, 0.07, 'square', 0.08);
+      else if (kind === 'hit') tone(900, 0.05, 'sine', 0.12);
+      else if (kind === 'head') { tone(1500, 0.09, 'sine', 0.16); tone(2000, 0.09, 'sine', 0.1, 0.05); }
+      else if (kind === 'kill') { tone(500, 0.1, 'triangle', 0.14); tone(750, 0.14, 'triangle', 0.14, 0.09); }
+    }
+    const feed = document.createElement('div');
+    feed.style.cssText = 'position:fixed;top:64px;right:12px;z-index:60;pointer-events:none;text-align:right;font:700 13px sans-serif;color:#fff;text-shadow:0 1px 3px #000';
+    document.body.appendChild(feed);
+    function feedMsg(txt) {
+      const d = document.createElement('div');
+      d.textContent = txt;
+      d.style.cssText = 'background:rgba(0,0,0,.45);padding:3px 8px;margin-top:3px;border-radius:4px';
+      feed.appendChild(d);
+      while (feed.children.length > 4) feed.removeChild(feed.firstChild);
+      setTimeout(() => d.remove(), 3500);
+    }
+    function removeDrop(g) {
+      scene.remove(g.mesh); if (g.marker) scene.remove(g.marker);
+      const i = gunPickups.indexOf(g); if (i >= 0) gunPickups.splice(i, 1);
+    }
+    function dropsClear() { gunPickups.filter(g => g.drop).forEach(removeDrop); }
+    function onKill(b, head) {
+      sfx('kill');
+      feedMsg('🎯 Tum ➜ Bot' + (head ? ' 💀 HEADSHOT' : ''));
+      if (player.kills + 1 > bestKills) {
+        bestKills = player.kills + 1;
+        try { localStorage.setItem('sasta_best', bestKills); } catch (e) {}
+      }
+      const keys = Object.keys(GUNS);
+      spawnGun(b.pos.x, b.pos.z, keys[Math.floor(Math.random() * keys.length)]);
+      gunPickups[gunPickups.length - 1].drop = true;
+      const drops = gunPickups.filter(g => g.drop && !g.taken);
+      if (drops.length > 10) removeDrop(drops[0]);
+    }
+    // Safe zone (numbers yahan se badal sakte ho)
+    const ZONE_START = 110, ZONE_END = 25, ZONE_DELAY = 40, ZONE_SHRINK = 120;
+    let zoneR = ZONE_START, zoneT = 0;
+    const zoneRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 40, 48, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff2b2b, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false })
+    );
+    zoneRing.position.y = 20; zoneRing.visible = false; scene.add(zoneRing);
+    const zoneTxt = document.createElement('div');
+    zoneTxt.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;font:700 13px sans-serif;color:#fff;background:rgba(0,0,0,.45);padding:3px 10px;border-radius:6px;display:none';
+    document.body.appendChild(zoneTxt);
+    function zoneReset() { zoneR = ZONE_START; zoneT = 0; zoneRing.visible = false; zoneTxt.style.display = 'none'; }
+    function updateZone(dt) {
+      if (player.state !== 'ground') return;
+      zoneT += dt;
+      if (zoneT > ZONE_DELAY) zoneR = Math.max(ZONE_END, ZONE_START - (zoneT - ZONE_DELAY) * (ZONE_START - ZONE_END) / ZONE_SHRINK);
+      zoneRing.visible = true; zoneRing.scale.set(zoneR, 1, zoneR);
+      const out = Math.hypot(player.pos.x, player.pos.z) > zoneR;
+      zoneTxt.style.display = 'block';
+      zoneTxt.textContent = out ? '⚠ ZONE ke bahar! HP kam ho raha hai' : (zoneT < ZONE_DELAY ? '🟢 Zone shuru hoga: ' + Math.ceil(ZONE_DELAY - zoneT) + 's' : '🔴 Zone chhota ho raha hai: ' + Math.round(zoneR) + 'm');
+      zoneTxt.style.color = out ? '#ff6b6b' : '#fff';
+      if (out) {
+        player.health -= 6 * dt;
+        if (player.health <= 0) { player.health = 0; showMenu('ELIMINATED', 'Kills: ' + player.kills, 'RETRY ▶'); zoneReset(); }
+        updateUI();
+      }
+    }
+
+    let _fpsT = 0, _fpsN = 0, _pr = Math.min(devicePixelRatio, 1.5);
     function animate() {
       requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.05);
+      const rawDt = clock.getDelta();
+      const dt = Math.min(rawDt, 0.05);
       if (gameState === 'playing') {
-        updatePlayer(dt); updateBots(dt);
+        updatePlayer(dt); updateBots(dt); updateZone(dt);
         if (player.state === 'plane') { viewmodel.visible = false; setPlaneMode(true); }
         else if (player.state === 'ground') updateCrosshairLock();
+      }
+      if (gameState === 'playing' && rawDt < 0.25) {
+        _fpsT += rawDt; _fpsN++;
+        if (_fpsT >= 2) {
+          const fps = _fpsN / _fpsT;
+          if (fps < 40 && _pr > 0.75) {
+            _pr = Math.max(0.75, _pr - 0.25);
+            renderer.setPixelRatio(_pr);
+          }
+          _fpsT = 0; _fpsN = 0;
+        }
       }
       renderer.render(scene, camera);
     }
