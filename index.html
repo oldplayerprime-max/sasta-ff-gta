@@ -321,8 +321,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1e88e5);
-    scene.fog = new THREE.FogExp2(0x42a5f5, 0.0032);
+    scene.background = new THREE.Color(0x1565c0);
+    scene.fog = new THREE.FogExp2(0x1976d2, 0.0032);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 500);
     
@@ -333,14 +333,15 @@
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 0.95;
     document.body.appendChild(renderer.domElement);
+    renderer.domElement.style.filter = 'saturate(1.3) contrast(1.06)';
 
-    scene.add(new THREE.AmbientLight(0xe8eaf0, 0.42));
-    scene.add(new THREE.HemisphereLight(0x64b5f6, 0x2e7d32, 0.55));
+    scene.add(new THREE.AmbientLight(0xe8eaf0, 0.32));
+    scene.add(new THREE.HemisphereLight(0x2196f3, 0x1b5e20, 0.6));
     
     // [SUPER OPTIMIZATION 2] Light Shadow Map Size
-    const sun = new THREE.DirectionalLight(0xffecb3, 1.35);
+    const sun = new THREE.DirectionalLight(0xffd180, 1.5);
     sun.position.set(90, 130, 70);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -1162,7 +1163,11 @@
     function shoot() {
       const g = getGun();
       if (!g || player.shootCd > 0 || player.state !== 'ground' || player.inCar) return;
-      player.shootCd = g.cd; player.recoil = 0.1; sfx('shot');
+      if (reloadT > 0) return;
+      if (g.mag === undefined) g.mag = magOf(g);
+      if (g.mag <= 0) { startReload(g); return; }
+      g.mag--; if (g.mag <= 0) startReload(g);
+      player.shootCd = g.cd; player.recoil = recoilOf(g); sfx('shot');
 
       updateCrosshairLock();
       let dir = getAimDirection();
@@ -1276,6 +1281,7 @@
       menu.classList.remove('hidden');
       menu.style.display = 'flex';
       menu.querySelector('h1').textContent = title;
+      try { mm.style.display = 'none'; ammoTxt.style.display = 'none'; zoneTxt.style.display = 'none'; } catch (e) {}
       document.getElementById('menu-sub').textContent = sub + (bestKills ? '  •  🏆 Best: ' + bestKills : '');
       document.getElementById('start-btn').textContent = btnText;
       gameState = title.indexOf('ELIMINATED') >= 0 ? 'dead' : (title.indexOf('BOOYAH') >= 0 ? 'booyah' : 'menu');
@@ -1356,7 +1362,7 @@
       });
       gunPickups.forEach(g => { g.taken = false; g.mesh.visible = true; if (g.marker) g.marker.visible = true; });
       cars.forEach(c => { c.occupied = false; });
-      zoneReset(); dropsClear();
+      zoneReset(); dropsClear(); landGrace = 0; reloadT = 0; reloadG = null;
       lobbyTimer = 15;
       lobbyActive = true;
       document.getElementById('countdown-overlay').classList.add('show');
@@ -1560,9 +1566,9 @@
           chuteGroup.visible = false; viewmodel.visible = true;
           camera.rotation.z = 0; setPlaneMode(false);
           // Free SVD on first land
-          const svd = GUNS.svd;
+          const svd = GUNS.ak;
           player.weapons[0] = { name: svd.name, body: svd.body, head: svd.head, cd: svd.cd, col: svd.col };
-          player.slot = 0;
+          player.slot = 0; landGrace = 8 + Math.random() * 4;
           updateUI();
         }
         return;
@@ -1682,7 +1688,7 @@
         const dist = b.pos.distanceTo(player.pos);
 
         // All bots fight when player is on ground nearby; far ones patrol
-        if (player.state === 'ground' && dist < 55) {
+        if (player.state === 'ground' && dist < 55 && landGrace <= 0) {
           b.state = 'attack';
           b.engaged = true;
         } else if (dist > 70) {
@@ -1757,7 +1763,12 @@
           }
           if (!b.inCar) {
             const dir = new THREE.Vector3().subVectors(player.pos, b.pos).normalize();
-            if (dist > HOLD_DIST + 0.4) {
+            if (b.health < 90 && dist < 40) {
+              // hurt: retreat
+              b.pos.x -= dir.x * b.speed * 0.9 * dt;
+              b.pos.z -= dir.z * b.speed * 0.9 * dt;
+              moving = true;
+            } else if (dist > HOLD_DIST + 0.4) {
               // approach until hold distance
               b.pos.x += dir.x * b.speed * 0.8 * dt;
               b.pos.z += dir.z * b.speed * 0.8 * dt;
@@ -1768,7 +1779,14 @@
               b.pos.z -= dir.z * b.speed * 0.7 * dt;
               moving = true;
             }
-            // else stand and shoot
+            // strafe (dodge left/right)
+            b.strafeT = (b.strafeT || 0) - dt;
+            if (b.strafeT <= 0) { b.strafeT = 1 + Math.random() * 1.5; b.strafeDir = Math.random() < 0.5 ? -1 : 1; }
+            if (dist < 28) {
+              b.pos.x += -dir.z * b.strafeDir * b.speed * 0.5 * dt;
+              b.pos.z += dir.x * b.strafeDir * b.speed * 0.5 * dt;
+              moving = true;
+            }
             b.shootT -= dt;
             if (b.shootT <= 0 && dist < 36 && player.state === 'ground') {
               b.shootT = 1.05 + Math.random() * 0.45;
@@ -1831,7 +1849,7 @@
       else if (kind === 'kill') { tone(500, 0.1, 'triangle', 0.14); tone(750, 0.14, 'triangle', 0.14, 0.09); }
     }
     const feed = document.createElement('div');
-    feed.style.cssText = 'position:fixed;top:64px;right:12px;z-index:60;pointer-events:none;text-align:right;font:700 13px sans-serif;color:#fff;text-shadow:0 1px 3px #000';
+    feed.style.cssText = 'position:fixed;top:112px;right:12px;z-index:60;pointer-events:none;text-align:right;font:700 13px sans-serif;color:#fff;text-shadow:0 1px 3px #000';
     document.body.appendChild(feed);
     function feedMsg(txt) {
       const d = document.createElement('div');
@@ -1887,13 +1905,58 @@
       }
     }
 
+    // ===== EXTRAS 2: plane hide, bot delay, reload/recoil, minimap =====
+    let landGrace = 0, reloadT = 0, reloadG = null, mmT = 0;
+    const MAGS = { 'AK-47': 30, 'M4A1': 30, 'MP40': 35, 'SVD': 10, 'AWM': 5, 'Pistol': 12 };
+    const RELOAD = { 'AK-47': 1.8, 'M4A1': 1.6, 'MP40': 1.5, 'SVD': 2.2, 'AWM': 2.8, 'Pistol': 1.1 };
+    const KICK = { 'AK-47': 0.2, 'M4A1': 0.14, 'MP40': 0.09, 'SVD': 0.32, 'AWM': 0.6, 'Pistol': 0.12 };
+    const magOf = g => MAGS[g.name] || 30;
+    const recoilOf = g => KICK[g.name] || 0.1;
+    function startReload(g) { if (reloadT > 0) return; reloadG = g; reloadT = RELOAD[g.name] || 1.8; }
+    const ammoTxt = document.createElement('div');
+    ammoTxt.style.cssText = 'position:fixed;top:34px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;font:700 13px sans-serif;color:#fff;background:rgba(0,0,0,.45);padding:3px 10px;border-radius:6px;display:none';
+    document.body.appendChild(ammoTxt);
+    const mm = document.createElement('canvas');
+    mm.width = mm.height = 100;
+    mm.style.cssText = 'position:fixed;top:8px;right:8px;width:100px;height:100px;z-index:60;pointer-events:none;border-radius:50%;border:2px solid rgba(255,255,255,.6);display:none';
+    document.body.appendChild(mm);
+    const mmc = mm.getContext('2d');
+    function drawMini() {
+      const R = 50, S = 48 / 60;
+      mmc.clearRect(0, 0, 100, 100);
+      mmc.fillStyle = 'rgba(10,20,10,.55)'; mmc.beginPath(); mmc.arc(R, R, R, 0, 7); mmc.fill();
+      mmc.strokeStyle = '#ff3b3b'; mmc.lineWidth = 2; mmc.beginPath();
+      mmc.arc(R - player.pos.x * S, R - player.pos.z * S, zoneR * S, 0, 7); mmc.stroke();
+      mmc.fillStyle = '#ff4d4d';
+      for (const b of bots) {
+        if (!b.alive) continue;
+        const dx = (b.pos.x - player.pos.x) * S, dz = (b.pos.z - player.pos.z) * S;
+        if (dx * dx + dz * dz > 46 * 46) continue;
+        mmc.beginPath(); mmc.arc(R + dx, R + dz, 2.5, 0, 7); mmc.fill();
+      }
+      mmc.strokeStyle = '#fff'; mmc.lineWidth = 2; mmc.beginPath(); mmc.moveTo(R, R);
+      mmc.lineTo(R - Math.sin(player.yaw) * 10, R - Math.cos(player.yaw) * 10); mmc.stroke();
+      mmc.fillStyle = '#4dff88'; mmc.beginPath(); mmc.arc(R, R, 3.5, 0, 7); mmc.fill();
+    }
+    function updateExtras(dt) {
+      plane.visible = player.state === 'plane';
+      const ground = player.state === 'ground';
+      if (landGrace > 0 && ground) landGrace -= dt;
+      if (reloadT > 0) { reloadT -= dt; if (reloadT <= 0 && reloadG) { reloadG.mag = magOf(reloadG); reloadG = null; } }
+      const g = getGun();
+      ammoTxt.style.display = ground && g ? 'block' : 'none';
+      if (ground && g) ammoTxt.textContent = reloadT > 0 ? '🔄 Reloading...' : g.name + '  ' + (g.mag === undefined ? magOf(g) : g.mag) + '/' + magOf(g);
+      mm.style.display = ground ? 'block' : 'none';
+      mmT -= dt; if (ground && mmT <= 0) { mmT = 0.1; drawMini(); }
+    }
+
     let _fpsT = 0, _fpsN = 0, _pr = Math.min(devicePixelRatio, 1.5);
     function animate() {
       requestAnimationFrame(animate);
       const rawDt = clock.getDelta();
       const dt = Math.min(rawDt, 0.05);
       if (gameState === 'playing') {
-        updatePlayer(dt); updateBots(dt); updateZone(dt);
+        updatePlayer(dt); updateBots(dt); updateZone(dt); updateExtras(dt);
         if (player.state === 'plane') { viewmodel.visible = false; setPlaneMode(true); }
         else if (player.state === 'ground') updateCrosshairLock();
       }
