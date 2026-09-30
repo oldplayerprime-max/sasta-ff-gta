@@ -16,7 +16,7 @@
       touch-action:none!important; user-select:none!important; position:fixed; inset:0;
       overscroll-behavior:none;
     }
-    body > canvas { display:block; position:fixed; inset:0; width:100%!important; height:100%!important; touch-action:none; }
+    body > canvas:first-of-type { display:block; position:fixed; inset:0; width:100%!important; height:100%!important; touch-action:none; }
     #ui { position:fixed; inset:0; pointer-events:none; z-index:10; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
     #crosshair {
       position:absolute; top:50%; left:50%; width:20px; height:20px; margin:-10px 0 0 -10px;
