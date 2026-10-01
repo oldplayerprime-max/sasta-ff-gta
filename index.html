@@ -16,7 +16,7 @@
       touch-action:none!important; user-select:none!important; position:fixed; inset:0;
       overscroll-behavior:none;
     }
-    body > canvas:first-of-type { display:block; position:fixed; inset:0; width:100%!important; height:100%!important; touch-action:none; }
+    body > canvas { display:block; position:fixed; inset:0; width:100%!important; height:100%!important; touch-action:none; }
     #ui { position:fixed; inset:0; pointer-events:none; z-index:10; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
     #crosshair {
       position:absolute; top:50%; left:50%; width:20px; height:20px; margin:-10px 0 0 -10px;
@@ -44,6 +44,8 @@
       width:160px; height:14px; background:rgba(0,0,0,0.65); border:2px solid rgba(255,255,255,0.8);
       border-radius:8px; overflow:hidden;
     }
+    #hud > div:first-child { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); text-align:center; z-index:30; }
+    #hud #alive { margin-left:104px; }
     #health-fill { height:100%; width:100%; background:linear-gradient(90deg, #ff3333, #f39c12, #2ecc71); transition:width .2s ease; }
     #alive { background:rgba(0, 0, 0, 0.6); padding:6px 16px; border-radius:20px; font-size:.9rem; border:1px solid rgba(255,255,255,0.2); }
     #weapon-ui { text-align:right; display:none; }
@@ -1167,7 +1169,7 @@
       if (g.mag === undefined) g.mag = magOf(g);
       if (g.mag <= 0) { startReload(g); return; }
       g.mag--; if (g.mag <= 0) startReload(g);
-      player.shootCd = g.cd; player.recoil = recoilOf(g); sfx('shot');
+      player.shootCd = g.cd; player.recoil = recoilOf(g); sfx('shot'); lastShotT = performance.now();
 
       updateCrosshairLock();
       let dir = getAimDirection();
@@ -1202,6 +1204,7 @@
         }
       }
 
+      if (hitBot && botWallBlocks(player.pos, hitBot.pos)) { feedMsg('🧱 Bot ki gloo wall ne bacha liya'); hitBot = null; }
       if (hitBot) {
         const dmg = isHead ? (g.head || 55) : (g.body || 28);
         hitBot.health -= dmg;
@@ -1362,7 +1365,7 @@
       });
       gunPickups.forEach(g => { g.taken = false; g.mesh.visible = true; if (g.marker) g.marker.visible = true; });
       cars.forEach(c => { c.occupied = false; });
-      zoneReset(); dropsClear(); landGrace = 0; reloadT = 0; reloadG = null;
+      zoneReset(); dropsClear(); landGrace = 0; reloadT = 0; reloadG = null; botWalls.forEach(w => scene.remove(w.mesh)); botWalls.length = 0;
       lobbyTimer = 15;
       lobbyActive = true;
       document.getElementById('countdown-overlay').classList.add('show');
@@ -1688,7 +1691,7 @@
         const dist = b.pos.distanceTo(player.pos);
 
         // All bots fight when player is on ground nearby; far ones patrol
-        if (player.state === 'ground' && dist < 55 && landGrace <= 0) {
+        if (player.state === 'ground' && (dist < 55 || (dist < 85 && performance.now() - lastShotT < 4000)) && landGrace <= 0) {
           b.state = 'attack';
           b.engaged = true;
         } else if (dist > 70) {
@@ -1763,7 +1766,10 @@
           }
           if (!b.inCar) {
             const dir = new THREE.Vector3().subVectors(player.pos, b.pos).normalize();
-            if (b.health < 90 && dist < 40) {
+            b.inCover = false;
+            if ((b.health < 110 || b.coverPt) && dist < 45 && smartCover(b, dir, dt)) {
+              moving = true;
+            } else if (b.health < 90 && dist < 40) {
               // hurt: retreat
               b.pos.x -= dir.x * b.speed * 0.9 * dt;
               b.pos.z -= dir.z * b.speed * 0.9 * dt;
@@ -1782,7 +1788,7 @@
             // strafe (dodge left/right)
             b.strafeT = (b.strafeT || 0) - dt;
             if (b.strafeT <= 0) { b.strafeT = 1 + Math.random() * 1.5; b.strafeDir = Math.random() < 0.5 ? -1 : 1; }
-            if (dist < 28) {
+            if (dist < 28 && !b.inCover) {
               b.pos.x += -dir.z * b.strafeDir * b.speed * 0.5 * dt;
               b.pos.z += dir.x * b.strafeDir * b.speed * 0.5 * dt;
               moving = true;
@@ -1916,11 +1922,14 @@
     const ammoTxt = document.createElement('div');
     ammoTxt.style.cssText = 'position:fixed;top:34px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;font:700 13px sans-serif;color:#fff;background:rgba(0,0,0,.45);padding:3px 10px;border-radius:6px;display:none';
     document.body.appendChild(ammoTxt);
-    const mm = document.createElement('canvas');
-    mm.width = mm.height = 100;
-    mm.style.cssText = 'position:fixed;top:8px;right:8px;width:100px;height:100px;z-index:60;pointer-events:none;border-radius:50%;border:2px solid rgba(255,255,255,.6);display:none';
+    const mm = document.createElement('div');
+    mm.style.cssText = 'position:fixed;top:8px;left:8px;width:100px;height:100px;z-index:60;pointer-events:none;border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,.6);box-sizing:content-box;display:none';
+    const mmCv = document.createElement('canvas');
+    mmCv.width = mmCv.height = 100;
+    mmCv.style.cssText = 'display:block;width:100px;height:100px';
+    mm.appendChild(mmCv);
     document.body.appendChild(mm);
-    const mmc = mm.getContext('2d');
+    const mmc = mmCv.getContext('2d');
     function drawMini() {
       const R = 50, S = 48 / 60;
       mmc.clearRect(0, 0, 100, 100);
@@ -1939,6 +1948,7 @@
       mmc.fillStyle = '#4dff88'; mmc.beginPath(); mmc.arc(R, R, 3.5, 0, 7); mmc.fill();
     }
     function updateExtras(dt) {
+      updateSmart(dt);
       plane.visible = player.state === 'plane';
       const ground = player.state === 'ground';
       if (landGrace > 0 && ground) landGrace -= dt;
@@ -1948,6 +1958,63 @@
       if (ground && g) ammoTxt.textContent = reloadT > 0 ? '🔄 Reloading...' : g.name + '  ' + (g.mag === undefined ? magOf(g) : g.mag) + '/' + magOf(g);
       mm.style.display = ground ? 'block' : 'none';
       mmT -= dt; if (ground && mmT <= 0) { mmT = 0.1; drawMini(); }
+    }
+
+    // ===== EXTRAS 3: smart bots (cover, heal, gloo wall, gunshot alert) =====
+    let lastShotT = 0;
+    const botWalls = [];
+    const botWallMat = new THREE.MeshBasicMaterial({ color: 0xbfe9ff, transparent: true, opacity: 0.55 });
+    function botWallBlocks(from, to) {
+      for (const w of botWalls) {
+        const nx = -Math.sin(w.yaw), nz = -Math.cos(w.yaw);
+        const dx = to.x - from.x, dz = to.z - from.z;
+        const den = dx * nx + dz * nz;
+        if (Math.abs(den) < 1e-4) continue;
+        const t = ((w.x - from.x) * nx + (w.z - from.z) * nz) / den;
+        if (t < 0 || t > 1) continue;
+        if (Math.hypot(from.x + dx * t - w.x, from.z + dz * t - w.z) < 1.9) return true;
+      }
+      return false;
+    }
+    function placeBotWall(b, dir) {
+      if (botWalls.length >= 6) { const o = botWalls.shift(); scene.remove(o.mesh); }
+      const yaw = Math.atan2(-dir.x, -dir.z);
+      const x = b.pos.x + dir.x * 1.8, z = b.pos.z + dir.z * 1.8;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 0.3), botWallMat);
+      m.position.set(x, 1.3, z); m.rotation.y = yaw; scene.add(m);
+      botWalls.push({ mesh: m, x, z, yaw, life: 12 });
+    }
+    function smartCover(b, dir, dt) {
+      b.wallCd = (b.wallCd || 0) - dt;
+      if (b.health < 110 && b.wallCd <= 0) { b.wallCd = 10; placeBotWall(b, dir); }
+      if (!b.coverPt) {
+        let best = null, bd = 1e9;
+        for (const c of colliders) {
+          if (Math.hypot(c.x - b.pos.x, c.z - b.pos.z) > 26) continue;
+          const pdx = c.x - player.pos.x, pdz = c.z - player.pos.z, pl = Math.hypot(pdx, pdz) || 1;
+          const r = Math.max(c.hw, c.hd) + 1.6;
+          const px = c.x + pdx / pl * r, pz = c.z + pdz / pl * r;
+          const d = Math.hypot(px - b.pos.x, pz - b.pos.z);
+          if (d < bd) { bd = d; best = { x: px, z: pz }; }
+        }
+        if (!best) return false;
+        b.coverPt = best;
+      }
+      if (b.health >= 150) { b.coverPt = null; return false; }
+      const dx = b.coverPt.x - b.pos.x, dz = b.coverPt.z - b.pos.z, d = Math.hypot(dx, dz);
+      if (d > 1) {
+        b.pos.x += dx / d * b.speed * 1.1 * dt; b.pos.z += dz / d * b.speed * 1.1 * dt;
+      } else {
+        b.inCover = true;
+        b.health = Math.min(160, b.health + 10 * dt);
+      }
+      return true;
+    }
+    function updateSmart(dt) {
+      for (let i = botWalls.length - 1; i >= 0; i--) {
+        botWalls[i].life -= dt;
+        if (botWalls[i].life <= 0) { scene.remove(botWalls[i].mesh); botWalls.splice(i, 1); }
+      }
     }
 
     let _fpsT = 0, _fpsN = 0, _pr = Math.min(devicePixelRatio, 1.5);
