@@ -326,7 +326,7 @@
     scene.background = new THREE.Color(0x1565c0);
     scene.fog = new THREE.FogExp2(0x1976d2, 0.0032);
 
-    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 500);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 300);
     
     // [SUPER OPTIMIZATION 1] Fast Renderer Settings
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -334,6 +334,13 @@
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
+    // LAG FIX: halka material (Lambert) sab MeshStandardMaterial ki jagah
+    (function () {
+      const L = THREE.MeshLambertMaterial;
+      const bad = ['roughness', 'metalness', 'bumpMap', 'bumpScale', 'normalMap', 'normalScale', 'roughnessMap', 'metalnessMap', 'envMap', 'envMapIntensity'];
+      THREE.MeshStandardMaterial = function (p) { p = Object.assign({}, p); bad.forEach(k => delete p[k]); return new L(p); };
+    })();
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.95;
     document.body.appendChild(renderer.domElement);
@@ -348,8 +355,8 @@
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.near = 2; sun.shadow.camera.far = 300;
-    sun.shadow.camera.left = sun.shadow.camera.bottom = -130;
-    sun.shadow.camera.right = sun.shadow.camera.top = 130;
+    sun.shadow.camera.left = sun.shadow.camera.bottom = -45;
+    sun.shadow.camera.right = sun.shadow.camera.top = 45;
     sun.shadow.bias = -0.0004;
     scene.add(sun);
 
@@ -1912,7 +1919,7 @@
     }
 
     // ===== EXTRAS 2: plane hide, bot delay, reload/recoil, minimap =====
-    let landGrace = 0, reloadT = 0, reloadG = null, mmT = 0;
+    let landGrace = 0, reloadT = 0, reloadG = null, mmT = 0, shadowFrame = 0;
     const MAGS = { 'AK-47': 30, 'M4A1': 30, 'MP40': 35, 'SVD': 10, 'AWM': 5, 'Pistol': 12 };
     const RELOAD = { 'AK-47': 1.8, 'M4A1': 1.6, 'MP40': 1.5, 'SVD': 2.2, 'AWM': 2.8, 'Pistol': 1.1 };
     const KICK = { 'AK-47': 0.2, 'M4A1': 0.14, 'MP40': 0.09, 'SVD': 0.32, 'AWM': 0.6, 'Pistol': 0.12 };
@@ -1949,6 +1956,13 @@
     }
     function updateExtras(dt) {
       updateSmart(dt);
+      if (player.state === 'ground') {
+        sun.position.set(player.pos.x + 90, 130, player.pos.z + 70);
+        sun.target.position.set(player.pos.x, 0, player.pos.z);
+        sun.target.updateMatrixWorld();
+      }
+      shadowFrame = (shadowFrame + 1) % 3;
+      if (shadowFrame === 0) renderer.shadowMap.needsUpdate = true;
       plane.visible = player.state === 'plane';
       const ground = player.state === 'ground';
       if (landGrace > 0 && ground) landGrace -= dt;
@@ -2031,8 +2045,8 @@
         _fpsT += rawDt; _fpsN++;
         if (_fpsT >= 2) {
           const fps = _fpsN / _fpsT;
-          if (fps < 40 && _pr > 0.75) {
-            _pr = Math.max(0.75, _pr - 0.25);
+          if (fps < 45 && _pr > 0.6) {
+            _pr = Math.max(0.6, _pr - 0.15);
             renderer.setPixelRatio(_pr);
           }
           _fpsT = 0; _fpsN = 0;
